@@ -1,1 +1,0 @@
-# abaqus_extract

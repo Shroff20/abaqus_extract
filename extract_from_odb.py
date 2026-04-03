@@ -1,15 +1,22 @@
-#abaqus script=myscript.py
-
+# abaqus python extract_from_odb.py odb_filepath
+# abaqus python extract_from_odb.py abq\Job-1.odb
 
 from odbAccess import openOdb
 import numpy as np 
 import pandas as pd
 import pickle
 from collections import defaultdict
+import os
+import sys
 
-filename = 'abq/Job-1.odb'
+
+filename = sys.argv[1]
+
+print("Processing file:", filename)
+
 odb = openOdb(path=filename)
-
+jobname = os.path.basename(filename).rstrip('.odb')
+output_folder = os.path.dirname(filename)
 
 def nested_dict():
     return defaultdict(nested_dict)
@@ -72,17 +79,19 @@ for step_name, step in odb.steps.items():
                 df = df.to_frame()
 
                 df.columns = pd.MultiIndex.from_tuples(df.columns, names=[ 'step_number', 'increment_number','total_time', 'step_name', ])
-
+                df = df.astype(np.float32)
                 all_data[step_number][increment_number][field_name][block_number] = df.T
 
 odb.close()
 all_data = to_standard_dict(all_data)
 
-with open('data.pkl', 'wb') as f:
+
+fn = os.path.join(output_folder, jobname+'.pkl')
+
+with open(fn, 'wb') as f:
     pickle.dump(all_data, f)
 
-                
-print(all_data)
+print('saved file:', fn)
 
 
 
