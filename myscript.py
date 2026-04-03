@@ -73,7 +73,7 @@ for step_name, step in odb.steps.items():
 
                 df.columns = pd.MultiIndex.from_tuples(df.columns, names=[ 'step_number', 'increment_number','total_time', 'step_name', ])
 
-                all_data[step_number][increment_number][field_name][block_number] = df
+                all_data[step_number][increment_number][field_name][block_number] = df.T
 
 odb.close()
 all_data = to_standard_dict(all_data)
