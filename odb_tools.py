@@ -42,7 +42,7 @@ def save_to_hdf5(loadcase, data_by_field, output_hdf5):
         )
 
 
-def save_to_matlab(data_by_field, output_filename):
+def save_to_matlab(loadcase, data_by_field, output_filename):
 
     data_dict = {}
 
@@ -53,7 +53,7 @@ def save_to_matlab(data_by_field, output_filename):
         row_index =df.index.to_frame()
         col_index =df.columns.to_frame()
 
-        data_dict[field_name] = {'row_index_names': row_index.columns, 'col_index_names': col_index.columns, 'row_index': row_index, 'col_index': col_index, 'data': df.values}
+        data_dict[field_name] = {'loadcase': loadcase, 'row_index_names': row_index.columns, 'col_index_names': col_index.columns, 'row_index': row_index, 'col_index': col_index, 'data': df.values}
 
 
     scipy.io.savemat(output_filename, data_dict, do_compression = True)
