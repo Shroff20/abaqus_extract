@@ -1,6 +1,8 @@
 import pandas as pd
 import scipy
-
+from odbAccess import openOdb
+import os
+from itertools import repeat
 
 def process_data(data):
 
@@ -57,3 +59,27 @@ def save_to_matlab(loadcase, data_by_field, output_filename):
 
 
     scipy.io.savemat(output_filename, data_dict, do_compression = True)
+
+
+
+
+    
+def get_step_frame_list(filename):
+
+    step_frame_list = []
+
+    print("Processing file:", filename)
+    odb = openOdb(path=filename, readOnly=True)
+    for step_name, step in odb.steps.items():
+        step_number = step.number
+        n_frames = len(step.frames)
+
+        step_frame_list += list(zip(repeat(step_number), range(n_frames)))
+
+        print(f"Step: {step_name}, Step number: {step_number}, Number of frames: {n_frames}")
+
+    odb.close()
+
+    print(f'(step, frame) = {step_frame_list}')
+    return step_frame_list
+

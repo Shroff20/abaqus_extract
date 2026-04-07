@@ -4,95 +4,123 @@
 from odbAccess import openOdb
 import numpy as np 
 import pandas as pd
-import pickle
-from collections import defaultdict
 import os
 import sys
+from itertools import repeat
+import multiprocessing as mp
+
+def get_step_frame_list(filename):
+
+    step_frame_list = []
+
+    print("Processing file:", filename)
+    odb = openOdb(path=filename, readOnly=True)
+    for step_name, step in odb.steps.items():
+        step_number = step.number
+        n_frames = len(step.frames)
+
+        step_frame_list += list(zip(repeat(step_number), range(n_frames)))
+
+        print(f"Step: {step_name}, Step number: {step_number}, Number of frames: {n_frames}")
+
+    odb.close()
+
+    print(f'(step, frame) = {step_frame_list}')
+    return step_frame_list
 
 
-filename = sys.argv[1]
 
-print("Processing file:", filename)
+def process_odb(filename, step_numbers = None, increment_numbers = None, field_names = None):
 
-odb = openOdb(path=filename)
-jobname = os.path.basename(filename).rstrip('.odb')
-output_folder = os.path.dirname(filename)
+    print("Processing file:", filename)
 
-def nested_dict():
-    return defaultdict(nested_dict)
+    odb = openOdb(path=filename, readOnly=True)
+    jobname = os.path.basename(filename).rstrip('.odb')
+    output_folder = os.path.join(os.path.dirname(filename), jobname)
+    os.makedirs(output_folder, exist_ok=True)
 
-def to_standard_dict(d):
-    if isinstance(d, defaultdict):
-        # Recursively convert the values, then cast the whole thing to a dict
-        return {k: to_standard_dict(v) for k, v in d.items()}
-    return d
 
-all_data = nested_dict()
-
-for step_name, step in odb.steps.items():
-
-    step_name = str(step_name)
-    step_number = step.number
-    t1 = step.totalTime
-    
-    for frame in step.frames:
-
-        increment_number = frame.incrementNumber
-        tinst = frame.frameValue
-        total_time = t1 + tinst
+    for step_name, step in odb.steps.items():
         
-        for field_name, field in frame.fieldOutputs.items():
-            # bulkDataBlocks returns a sequence of blocks
-            # Blocks are grouped by element type/section properties
-            blocks = field.bulkDataBlocks
+        step_name = str(step_name)
+        step_number = step.number
+        t1 = step.totalTime
+
+        if step_numbers is None or step_number in step_numbers:
+    
             
-            for block_number, block in enumerate(blocks):
+            for frame in step.frames:
+                increment_number = frame.incrementNumber
+                tinst = frame.frameValue
+                total_time = t1 + tinst  # calculate outside the if statement - have to always increment
 
-                field_name = str(field.name)
-                instance_name = block.instance.name if block.instance else "Assembly"
-                elem_type = str(block.sectionPoint)
-                data = block.data           # Flat array of values
-                node_labels = block.nodeLabels
-                elem_labels = block.elementLabels
-                component_labels = block.componentLabels
-                position = str(block.position)
+                if increment_numbers is None or increment_number in increment_numbers:
 
-                if component_labels  == (): # scalar fields have no labels, so just use the field name as label
-                    component_labels = (str(field_name),)
+                    
+                    for field_name, field in frame.fieldOutputs.items():
+                        # bulkDataBlocks returns a sequence of blocks
+                        # Blocks are grouped by element type/section properties
+                        blocks = field.bulkDataBlocks
+                        
+                        for block_number, block in enumerate(blocks):
 
-                print(total_time, step_name, increment_number, field_name, instance_name, elem_type, component_labels, position, data.shape)
+                            field_name = str(field.name)
 
-                if position == 'NODAL':
-                    index = node_labels
-                elif position == 'INTEGRATION_POINT':
-                    index = elem_labels
-                else:
-                    raise Exception(f'unsupported position type {position}')
+                            if field_names is None or field_name in field_names:
 
-                columns = ( (field_name, component, instance_name) for component in component_labels)
+                                instance_name = block.instance.name if block.instance else "Assembly"
+                                elem_type = str(block.sectionPoint)
+                                data = block.data           # Flat array of values
+                                node_labels = block.nodeLabels
+                                elem_labels = block.elementLabels
+                                component_labels = block.componentLabels
+                                position = str(block.position)
+                                integraion_points = block.integrationPoints
 
-                df = pd.DataFrame(data, columns = columns, index = index)
-                df.columns = pd.MultiIndex.from_tuples(df.columns, names=['field_name', 'component', 'instance_name'])
-                df.index.name = 'idx'
-                df = df.unstack(level='idx')
-                df.name = (step_number, increment_number, total_time, step_name)
-                df = df.to_frame()
+                                if component_labels  == (): # scalar fields have no labels, so just use the field name as label
+                                    component_labels = (str(field_name),)
 
-                df.columns = pd.MultiIndex.from_tuples(df.columns, names=[ 'step_number', 'increment_number','total_time', 'step_name', ])
-                df = df.astype(np.float32)
-                all_data[step_number][increment_number][field_name][block_number] = df.T
+                                print(f'{total_time=}, {step_name=}, {increment_number=}, {field_name=}, {instance_name=}, {elem_type=}, {component_labels=}, {position=}, {data.shape=}')
 
-odb.close()
-all_data = to_standard_dict(all_data)
+                                if position == 'NODAL':
+                                    index = node_labels
+                                elif position == 'INTEGRATION_POINT':
+                                    index = zip(elem_labels, integraion_points)
+                                else:
+                                    raise Exception(f'unsupported position type {position}')
+
+                                columns = ( (field_name, component, instance_name) for component in component_labels)
+
+                                df = pd.DataFrame(data, columns = columns, index = index)
+                                df.columns = pd.MultiIndex.from_tuples(df.columns, names=['field_name', 'component', 'instance_name'])
+                                df.index.name = 'idx'
+                                df = df.unstack(level='idx')
+                                df.name = (step_number, increment_number, total_time, step_name)
+                                df = df.to_frame()
+
+                                df.columns = pd.MultiIndex.from_tuples(df.columns, names=[ 'step_number', 'increment_number','total_time', 'step_name', ])
+                                df = df.astype(np.float32)
+                                df = df.T
+                                fn = f'{jobname}_step_{step_number}_inc_{increment_number}_field_{field_name}_block_{block_number}.pkl'
+                                df.to_pickle(os.path.join(output_folder, fn))
+                                print(f'saved {fn} with shape {df.shape}')
+
+    #print(f'finished processing file: {filename}')
 
 
-fn = os.path.join(output_folder, jobname+'.pkl')
 
-with open(fn, 'wb') as f:
-    pickle.dump(all_data, f)
+if __name__ == "__main__":
 
-print('saved file:', fn)
+    filename = sys.argv[1]
+    step_frame_list = get_step_frame_list(filename)
+    field_names = ['S', 'NT11']
 
+    starargs = [(filename, [step,], [frame,], field_names) for step, frame in step_frame_list]
+    print(starargs)
 
+    with mp.Pool(processes=4) as pool:
+        pool.starmap(process_odb, starargs)
+
+    #process_odb(filename, step_numbers=None, increment_numbers=None, field_names=None)
 
 
