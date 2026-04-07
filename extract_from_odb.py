@@ -8,6 +8,9 @@ import os
 import sys
 from itertools import repeat
 import multiprocessing as mp
+import argparse
+
+
 
 def get_step_frame_list(filename):
 
@@ -25,7 +28,6 @@ def get_step_frame_list(filename):
 
     odb.close()
 
-    print(f'(step, frame) = {step_frame_list}')
     return step_frame_list
 
 
@@ -111,16 +113,32 @@ def process_odb(filename, step_numbers = None, increment_numbers = None, field_n
 
 if __name__ == "__main__":
 
-    filename = sys.argv[1]
-    step_frame_list = get_step_frame_list(filename)
-    field_names = ['S', 'NT11']
+    parser = argparse.ArgumentParser(description='Extract data from ABAQUS ODB files')
+    parser.add_argument('odb_filepath', help='Path to the ODB file')
+    parser.add_argument('--step_numbers', nargs='+', type=int, help='Step numbers to process', default=None)
+    parser.add_argument('--field_names', nargs='+', help='Field names to process', default=None)
+    parser.add_argument('--processes', help='number of processess to use for multiprocessing', default=1, type=int)
 
-    starargs = [(filename, [step,], [frame,], field_names) for step, frame in step_frame_list]
-    print(starargs)
+    args = parser.parse_args()
+    print(args)
 
-    with mp.Pool(processes=4) as pool:
-        pool.starmap(process_odb, starargs)
+    if args.processes ==1:
+        print('using single process')
+        process_odb(args.odb_filepath, step_numbers = args.step_numbers, field_names =  args.field_names)
+    else:
 
-    #process_odb(filename, step_numbers=None, increment_numbers=None, field_names=None)
+        num_cpus = mp.cpu_count()
+        args.processes = min(args.processes, num_cpus-1)
+
+        step_frame_list = get_step_frame_list(args.odb_filepath)
+        step_frame_list = [ (step, frame) for step, frame in step_frame_list if (args.step_numbers is None or step in args.step_numbers) ]
+        print(f'(step, frame) = {step_frame_list}')
+
+        starargs = [(args.odb_filepath, [step,], [frame,], args.field_names) for step, frame in step_frame_list]
+        print(starargs)
+
+        with mp.Pool(processes=args.processes) as pool:
+            pool.starmap(process_odb, starargs)
+
 
 
