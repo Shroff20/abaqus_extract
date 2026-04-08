@@ -1,5 +1,6 @@
-# abaqus python extract_from_odb.py odb_filepath
-# abaqus python extract_from_odb.py abq\Job-1.odb
+# abaqus python extract_from_odb.py odb_filepath --processes N --field_names NT11 S
+# abaqus python extract_from_odb.py .\abq\Job-2.odb --processes 32 --field_names NT11 S
+
 
 from odbAccess import openOdb
 import numpy as np 
