@@ -1,40 +1,7 @@
 import pandas as pd
 import scipy
-from odbAccess import openOdb
 import os
 from itertools import repeat
-
-def process_data(data):
-
-    data_by_field = {}
-
-    for step_number, step_data in data.items():
-        for increment_number, increment_data in step_data.items():
-            for field_name, field_data in increment_data.items():
-
-                block_data = []
-                for block_number, df in field_data.items():
-                    print(
-                        f"      * Step: {step_number}, Increment: {increment_number}, Field: {field_name}, Block: {block_number}"
-                    )
-                    block_data.append(df)
-
-                df_merged = pd.concat(block_data, axis=1)
-
-                if field_name not in data_by_field:
-                    data_by_field[field_name] = []
-
-                data_by_field[field_name].append(df_merged)
-
-    for field_name, dfs in data_by_field.items():
-        data_by_field[field_name] = pd.concat(dfs, axis=0)
-        data_by_field[field_name].sort_index(inplace=True)
-        data_by_field[field_name].sort_index(inplace=True, axis=1)
-        assert (
-            not data_by_field[field_name].isna().any().any()
-        )  # make sure there are no Nans
-
-    return data_by_field
 
 
 def save_to_hdf5(loadcase, data_by_field, output_hdf5):
@@ -59,27 +26,4 @@ def save_to_matlab(loadcase, data_by_field, output_filename):
 
 
     scipy.io.savemat(output_filename, data_dict, do_compression = True)
-
-
-
-
-    
-def get_step_frame_list(filename):
-
-    step_frame_list = []
-
-    print("Processing file:", filename)
-    odb = openOdb(path=filename, readOnly=True)
-    for step_name, step in odb.steps.items():
-        step_number = step.number
-        n_frames = len(step.frames)
-
-        step_frame_list += list(zip(repeat(step_number), range(n_frames)))
-
-        print(f"Step: {step_name}, Step number: {step_number}, Number of frames: {n_frames}")
-
-    odb.close()
-
-    print(f'(step, frame) = {step_frame_list}')
-    return step_frame_list
 

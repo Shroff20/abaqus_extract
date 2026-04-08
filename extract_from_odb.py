@@ -86,26 +86,35 @@ def process_odb(filename, step_numbers = None, increment_numbers = None, field_n
                                 print(f'{total_time=}, {step_name=}, {increment_number=}, {field_name=}, {instance_name=}, {elem_type=}, {component_labels=}, {position=}, {data.shape=}')
 
                                 if position == 'NODAL':
-                                    index = node_labels
+                                    index1 = node_labels
+                                    index2 = [-1] * len(node_labels)  # dummy index to allow unstacking
                                 elif position == 'INTEGRATION_POINT':
-                                    index = zip(elem_labels, integraion_points)
+                                    index1 = elem_labels
+                                    index2= integraion_points
                                 else:
                                     raise Exception(f'unsupported position type {position}')
+
+                                index = list(zip(index1, index2))
+                                index = pd.MultiIndex.from_tuples(index, names=["node_or_element_idx", "integration_point"])
 
                                 columns = ( (field_name, component, instance_name) for component in component_labels)
 
                                 df = pd.DataFrame(data, columns = columns, index = index)
                                 df.columns = pd.MultiIndex.from_tuples(df.columns, names=['field_name', 'component', 'instance_name'])
-                                df.index.name = 'idx'
-                                df = df.unstack(level='idx')
+                                #df.index.name = 'idx'
+                                df = df.unstack(level=index.names)
                                 df.name = (step_number, increment_number, total_time, step_name)
                                 df = df.to_frame()
 
+                                #print(df)
                                 df.columns = pd.MultiIndex.from_tuples(df.columns, names=[ 'step_number', 'increment_number','total_time', 'step_name', ])
                                 df = df.astype(np.float32)
                                 df = df.T
                                 fn = f'{jobname}_step_{step_number}_inc_{increment_number}_field_{field_name}_block_{block_number}.pkl'
                                 df.to_pickle(os.path.join(output_folder, fn))
+
+                                #print(df)
+
                                 print(f'saved {fn} with shape {df.shape}')
 
     #print(f'finished processing file: {filename}')
