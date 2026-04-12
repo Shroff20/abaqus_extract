@@ -131,6 +131,23 @@ def save_to_matlab(loadcase, data_by_field, output_filename):
 
     scipy.io.savemat(output_filename, data_dict, do_compression=True)
 
+def fast_vconcat(df_list):  # TODO: Make this function preserve multiindex before using 
+
+    first_cols = df_list[0].columns
+    all_columns_same = all(first_cols.equals(df.columns) for df in df_list[1:])
+
+    if all_columns_same:
+        #print('using np concat')
+        df = np.vstack(df_list)
+        df = pd.DataFrame(df, columns = first_cols, index = np.concatenate([df.index.to_list() for df in df_list]))
+
+    else:
+        print('columns not the same, using pd concat')
+        df = pd.concat(df_list, axis = 0)
+
+    assert df.index.is_unique
+
+    return df
 
 def parse_odb(odb_fn, processes=16, fields_to_extract=None):
 
@@ -163,6 +180,8 @@ def parse_odb(odb_fn, processes=16, fields_to_extract=None):
         data_dict_by_field[field_name] = pd.concat(
             data_dict_by_field[field_name], axis=0
         )
+        #data_dict_by_field[field_name] = fast_vconcat(data_dict_by_field[field_name])
+
         data_dict_by_field[field_name].sort_index(inplace=True, axis=0)
         data_dict_by_field[field_name].sort_index(inplace=True, axis=1)
         data_dict_by_field[field_name] = data_dict_by_field[field_name].astype(
