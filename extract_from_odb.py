@@ -13,6 +13,9 @@ import scipy
 
 def parse_frame(odb_fn, step_name, increment_number, fields_to_extract=None):
 
+
+    print(f'     * starting {step_name=}, {increment_number=}')
+
     odb = openOdb(path=odb_fn, readOnly=True)
 
     step = odb.steps[step_name]
@@ -135,6 +138,8 @@ def parse_odb(odb_fn, processes=16, fields_to_extract=None):
     loadcase = os.path.basename(odb_fn).removesuffix(".odb")
 
     data_dict_by_field = {}
+
+    print(f'starting to process {odb_fn} with {processes=}')
     for step_name, step in odb.steps.items():
 
         step_name = str(step_name)
