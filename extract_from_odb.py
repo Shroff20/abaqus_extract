@@ -1,154 +1,180 @@
-# abaqus python extract_from_odb.py odb_filepath --processes N --field_names NT11 S
-# abaqus python extract_from_odb.py .\abq\Job-2.odb --processes 32 --field_names NT11 S
+# abaqus python extract_from_odb.py  abq\Job-1.odb --formats .csv .mat .pkl
 
 
-from odbAccess import openOdb
-import numpy as np 
 import pandas as pd
+import scipy
+import numpy as np
+from odbAccess import openOdb
 import os
-import sys
-from itertools import repeat
 import multiprocessing as mp
 import argparse
+import scipy
 
 
+def parse_frame(odb_fn, step_name, increment_number, fields_to_extract = None):
 
-def get_step_frame_list(filename):
+    odb = openOdb(path=odb_fn, readOnly=True)
 
-    step_frame_list = []
+    step = odb.steps[step_name]
+    step_number = step.number
+    step_total_time = step.totalTime
 
-    print("Processing file:", filename)
-    odb = openOdb(path=filename, readOnly=True)
-    for step_name, step in odb.steps.items():
-        step_number = step.number
-        n_frames = len(step.frames)
+    frame = step.frames[increment_number]
 
-        step_frame_list += list(zip(repeat(step_number), range(n_frames)))
+    assert increment_number == frame.incrementNumber
+    tinst = frame.frameValue
+    total_time = step_total_time + tinst  # calculate outside the if statement - have to always increment
 
-        print(f"Step: {step_name}, Step number: {step_number}, Number of frames: {n_frames}")
+    data_dict = {}
+    for field_name, field in frame.fieldOutputs.items():
 
-    odb.close()
+        field_name = str(field.name)
+    
+        if fields_to_extract is None or field_name in fields_to_extract:
 
-    return step_frame_list
+            blocks = field.bulkDataBlocks
+                        
+            for block_number, block in enumerate(blocks):
+
+                instance_name = block.instance.name if block.instance else "Assembly"
+                elem_type = str(block.sectionPoint)
+                data = block.data           # Flat array of values
+                node_labels = block.nodeLabels
+                elem_labels = block.elementLabels
+                component_labels = block.componentLabels
+                position = str(block.position)
+                integraion_points = block.integrationPoints
+
+                if component_labels  == (): # scalar fields have no labels, so just use the field name as label
+                    component_labels = (field_name,)
+
+                #print(f'{total_time=}, {step_name=}, {increment_number=}, {field_name=}, {instance_name=}, {elem_type=}, {component_labels=}, {position=}, {data.shape=}')
+
+                if position == 'NODAL':
+                    index1 = node_labels
+                    index2 = [-1] * len(node_labels)  # dummy index to allow unstacking
+                elif position == 'INTEGRATION_POINT':
+                    index1 = elem_labels
+                    index2= integraion_points
+                else:
+                    raise Exception(f'unsupported position type {position}')
+
+                index = list(zip(index1, index2))
+                index = pd.MultiIndex.from_tuples(index, names=["node_or_element_idx", "integration_point"])
+
+                columns = ( (field_name, component, instance_name) for component in component_labels)
+
+                df = pd.DataFrame(data, columns = columns, index = index)
+                df.columns = pd.MultiIndex.from_tuples(df.columns, names=['field_name', 'component', 'instance_name'])
+                #df.index.name = 'idx'
+                df = df.unstack(level=index.names)
+                df.name = (step_number, increment_number, total_time, step_name)
+                df = df.to_frame()
+
+                #print(df)
+                df.columns = pd.MultiIndex.from_tuples(df.columns, names=[ 'step_number', 'increment_number','total_time', 'step_name', ])
+                df = df.astype(np.float32)
+                df = df.T
+
+                if field_name not in data_dict:
+                    data_dict[field_name] = []
+                data_dict[field_name].append(df)
+
+    for field_name in data_dict.keys():
+        data_dict[field_name] = pd.concat(data_dict[field_name], axis = 1)
+        data_dict[field_name].sort_index(inplace = True, axis = 0)
+        data_dict[field_name].sort_index(inplace = True, axis = 1)
+
+    return data_dict
+
+def save_to_matlab(loadcase, data_by_field, output_filename):
+    print(f'starting to save to {output_filename}')
+    data_dict = {}
+    for field_name, df in data_by_field.items():
+                                        
+        print(f"     * saved {field_name} {df.shape}")
+
+        row_index =df.index.to_frame()
+        col_index =df.columns.to_frame()
+
+        data_dict[field_name] = {'loadcase': loadcase, 'row_index_names': row_index.columns, 'col_index_names': col_index.columns, 'row_index': row_index, 'col_index': col_index, 'data': df.values}
+
+    scipy.io.savemat(output_filename, data_dict, do_compression = True)
 
 
+def parse_odb(odb_fn, processes = 16, fields_to_extract = None):
 
-def process_odb(filename, step_numbers = None, increment_numbers = None, field_names = None):
+    odb = openOdb(path=odb_fn, readOnly=True)
+    loadcase = os.path.basename(odb_fn).removesuffix('.odb')
 
-    print("Processing file:", filename)
-
-    odb = openOdb(path=filename, readOnly=True)
-    jobname = os.path.basename(filename).rstrip('.odb')
-    output_folder = os.path.join(os.path.dirname(filename), jobname)
-    os.makedirs(output_folder, exist_ok=True)
-
-
+    data_dict_by_field = {}
     for step_name, step in odb.steps.items():
         
         step_name = str(step_name)
         step_number = step.number
-        t1 = step.totalTime
+        step_total_time = step.totalTime
 
-        if step_numbers is None or step_number in step_numbers:
+        with mp.Pool(processes=processes) as pool:
+            # parse_frame(odb, step_name, increment_number,
+            results = pool.starmap(parse_frame, [ (odb_fn, step_name, i, fields_to_extract) for i in range(len(step.frames)) ])
+
+        for result in results:
+            for field_name, df in result.items():
+                if field_name not in data_dict_by_field:
+                    data_dict_by_field[field_name] = []
+                data_dict_by_field[field_name].append(df)
+
+    for field_name in data_dict_by_field.keys():
+        data_dict_by_field[field_name] = pd.concat(data_dict_by_field[field_name], axis = 0)
+        data_dict_by_field[field_name].sort_index(inplace = True, axis = 0)
+        data_dict_by_field[field_name].sort_index(inplace = True, axis = 1)
+        data_dict_by_field[field_name] =  data_dict_by_field[field_name].astype(np.float32)
+        assert data_dict_by_field[field_name].notna().all().all(), "Some values are missing"
+
+        print(f'{loadcase}" : {field_name}: (timepoints, dofs) = {data_dict_by_field[field_name].shape}')
+
+    return data_dict_by_field
+
+
+def save_data(data_dict_by_field, loadcase, output_folder, formats = ['.mat']):
     
-            
-            for frame in step.frames:
-                increment_number = frame.incrementNumber
-                tinst = frame.frameValue
-                total_time = t1 + tinst  # calculate outside the if statement - have to always increment
+    os.makedirs(output_folder, exist_ok = True)
 
-                if increment_numbers is None or increment_number in increment_numbers:
+    if '.pkl' in formats:
+        print(f'starting to save {loadcase} to .pkl')
+        for field_name, df in data_dict_by_field.items():
+            fn = os.path.join(output_folder, f'{loadcase}__{field_name}.pkl')
+            df.to_pickle(fn)
+            print(f'     * saved {field_name} {df.shape} to {fn}')
 
-                    
-                    for field_name, field in frame.fieldOutputs.items():
-                        # bulkDataBlocks returns a sequence of blocks
-                        # Blocks are grouped by element type/section properties
-                        blocks = field.bulkDataBlocks
-                        
-                        for block_number, block in enumerate(blocks):
-
-                            field_name = str(field.name)
-
-                            if field_names is None or field_name in field_names:
-
-                                instance_name = block.instance.name if block.instance else "Assembly"
-                                elem_type = str(block.sectionPoint)
-                                data = block.data           # Flat array of values
-                                node_labels = block.nodeLabels
-                                elem_labels = block.elementLabels
-                                component_labels = block.componentLabels
-                                position = str(block.position)
-                                integraion_points = block.integrationPoints
-
-                                if component_labels  == (): # scalar fields have no labels, so just use the field name as label
-                                    component_labels = (str(field_name),)
-
-                                print(f'{total_time=}, {step_name=}, {increment_number=}, {field_name=}, {instance_name=}, {elem_type=}, {component_labels=}, {position=}, {data.shape=}')
-
-                                if position == 'NODAL':
-                                    index1 = node_labels
-                                    index2 = [-1] * len(node_labels)  # dummy index to allow unstacking
-                                elif position == 'INTEGRATION_POINT':
-                                    index1 = elem_labels
-                                    index2= integraion_points
-                                else:
-                                    raise Exception(f'unsupported position type {position}')
-
-                                index = list(zip(index1, index2))
-                                index = pd.MultiIndex.from_tuples(index, names=["node_or_element_idx", "integration_point"])
-
-                                columns = ( (field_name, component, instance_name) for component in component_labels)
-
-                                df = pd.DataFrame(data, columns = columns, index = index)
-                                df.columns = pd.MultiIndex.from_tuples(df.columns, names=['field_name', 'component', 'instance_name'])
-                                #df.index.name = 'idx'
-                                df = df.unstack(level=index.names)
-                                df.name = (step_number, increment_number, total_time, step_name)
-                                df = df.to_frame()
-
-                                #print(df)
-                                df.columns = pd.MultiIndex.from_tuples(df.columns, names=[ 'step_number', 'increment_number','total_time', 'step_name', ])
-                                df = df.astype(np.float32)
-                                df = df.T
-                                fn = f'{jobname}_step_{step_number}_inc_{increment_number}_field_{field_name}_block_{block_number}.pkl'
-                                df.to_pickle(os.path.join(output_folder, fn))
-
-                                #print(df)
-
-                                print(f'saved {fn} with shape {df.shape}')
-
-    #print(f'finished processing file: {filename}')
+    if '.csv' in formats:
+        print(f'starting to save {loadcase} to .csv')
+        
+        for field_name, df in data_dict_by_field.items():
+            fn = os.path.join(output_folder, f'{loadcase}__{field_name}.csv')
+            df.to_csv(fn)
+            print(f'     * saved {field_name} {df.shape} to {fn}')
 
 
+    if '.mat' in formats:
+        fn = os.path.join(output_folder, f'{loadcase}.mat')
+        save_to_matlab(loadcase, data_dict_by_field, fn)
+        print(f'Saved data to {fn}')
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser(description='Extract data from ABAQUS ODB files')
-    parser.add_argument('odb_filepath', help='Path to the ODB file')
-    parser.add_argument('--step_numbers', nargs='+', type=int, help='Step numbers to process', default=None)
-    parser.add_argument('--field_names', nargs='+', help='Field names to process', default=None)
-    parser.add_argument('--processes', help='number of processess to use for multiprocessing', default=1, type=int)
+    argparser = argparse.ArgumentParser(description='Extract data from Abaqus ODB file and save in various formats.')
+    argparser.add_argument('odb_filepath', help='Path to the ODB file')
+    argparser.add_argument('--output_folder', help='Folder to save the output files', default='output')
+    argparser.add_argument('--formats', nargs='+', help='Formats to save the data in (e.g. .mat, .csv, .pkl)', default=['.mat'])
+    argparser.add_argument('--processes', type=int, help='Number of processes to use for parallel processing', default=16)
+    argparser.add_argument('--fields', nargs='+', help='Fields to extract from the ODB file', default=None)
+    args = argparser.parse_args()
 
-    args = parser.parse_args()
-    print(args)
+    print(f'running with: {args}')
 
-    if args.processes ==1:
-        print('using single process')
-        process_odb(args.odb_filepath, step_numbers = args.step_numbers, field_names =  args.field_names)
-    else:
-
-        num_cpus = mp.cpu_count()
-        args.processes = min(args.processes, num_cpus-1)
-
-        step_frame_list = get_step_frame_list(args.odb_filepath)
-        step_frame_list = [ (step, frame) for step, frame in step_frame_list if (args.step_numbers is None or step in args.step_numbers) ]
-        print(f'(step, frame) = {step_frame_list}')
-
-        starargs = [(args.odb_filepath, [step,], [frame,], args.field_names) for step, frame in step_frame_list]
-        print(starargs)
-
-        with mp.Pool(processes=args.processes) as pool:
-            pool.starmap(process_odb, starargs)
-
-
-
+    odb_fn = args.odb_filepath
+    loadcase = os.path.basename(odb_fn).removesuffix('.odb')
+    data_dict_by_field = parse_odb(odb_fn, processes=args.processes, fields_to_extract=args.fields)
+    output_folder = args.output_folder
+    save_data(data_dict_by_field, loadcase, output_folder, formats = args.formats)
