@@ -13,7 +13,7 @@ from itertools import repeat
 import multiprocessing as mp
 import argparse
 import glob
-
+import scipy
 
 
 def parse_frame(frame, step_number, step_name, step_total_time, fields_to_extract = None):
@@ -83,12 +83,26 @@ def parse_frame(frame, step_number, step_name, step_total_time, fields_to_extrac
 
     return data_dict
 
+def save_to_matlab(loadcase, data_by_field, output_filename):
 
+    data_dict = {}
+    for field_name, df in data_by_field.items():
+                                        
+        print(f"Field: {field_name}, DataFrame shape: {df.shape}")
+
+        row_index =df.index.to_frame()
+        col_index =df.columns.to_frame()
+
+        data_dict[field_name] = {'loadcase': loadcase, 'row_index_names': row_index.columns, 'col_index_names': col_index.columns, 'row_index': row_index, 'col_index': col_index, 'data': df.values}
+
+    scipy.io.savemat(output_filename, data_dict, do_compression = True)
 
 
 odb_fn = r'.\abq\Job-2.odb'
 
 odb = openOdb(path=odb_fn, readOnly=True)
+
+loadcase = os.path.basename(odb_fn).removesuffix('.odb')
 
 
 data_dict_by_field = {}
@@ -115,8 +129,21 @@ for field_name in data_dict_by_field.keys():
     data_dict_by_field[field_name] =  data_dict_by_field[field_name].astype(np.float32)
     assert data_dict_by_field[field_name].notna().all().all(), "Some values are missing"
 
-
     print(f'{field_name}: (timepoints, dofs) = {data_dict_by_field[field_name].shape}')
 
 
-    data_dict_by_field[field_name].to_parquet(f'{field_name}.parquet')
+
+def save_data(data_dict_by_field, loadcase, output_folder):
+    
+    output_folder = 'tmp_output'
+    os.makedirs(output_folder, exist_ok = True)
+
+    for field_name, df in data_dict_by_field.items():
+        fn = os.path.join(output_folder, f'{field_name}.pkl')
+        df.to_pickle(fn)
+
+        fn = os.path.join(output_folder, f'{field_name}.csv')
+        df.to_csv(fn)
+
+    fn = os.path.join(output_folder, f'{loadcase}.mat')
+    save_to_matlab(loadcase, data_dict_by_field, fn)
