@@ -16,9 +16,17 @@ import glob
 import scipy
 
 
-def parse_frame(frame, step_number, step_name, step_total_time, fields_to_extract = None):
+def parse_frame(odb_fn, step_name, increment_number, fields_to_extract = None):
 
-    increment_number = frame.incrementNumber
+    odb = openOdb(path=odb_fn, readOnly=True)
+
+    step = odb.steps[step_name]
+    step_number = step.number
+    step_total_time = step.totalTime
+
+    frame = step.frames[increment_number]
+
+    assert increment_number == frame.incrementNumber
     tinst = frame.frameValue
     total_time = step_total_time + tinst  # calculate outside the if statement - have to always increment
 
@@ -98,38 +106,41 @@ def save_to_matlab(loadcase, data_by_field, output_filename):
     scipy.io.savemat(output_filename, data_dict, do_compression = True)
 
 
-odb_fn = r'.\abq\Job-2.odb'
-
-odb = openOdb(path=odb_fn, readOnly=True)
-
-loadcase = os.path.basename(odb_fn).removesuffix('.odb')
 
 
-data_dict_by_field = {}
+if __name__ == "__main__":
 
-for step_name, step in odb.steps.items():
-    
-    step_name = str(step_name)
-    step_number = step.number
-    step_total_time = step.totalTime
+    odb_fn = r'.\abq\Job-2.odb'
 
-    for frame in step.frames:
-        print(f'Processing step {step_name}, increment {frame.incrementNumber}')
-        frame_data_dict = parse_frame(frame, step_number, step_name, step_total_time)
+    odb = openOdb(path=odb_fn, readOnly=True)
+    loadcase = os.path.basename(odb_fn).removesuffix('.odb')
 
-        for field_name, df in frame_data_dict.items():
-            if field_name not in data_dict_by_field:
-                data_dict_by_field[field_name] = []
-            data_dict_by_field[field_name].append(df)
+    data_dict_by_field = {}
+    for step_name, step in odb.steps.items():
+        
+        step_name = str(step_name)
+        step_number = step.number
+        step_total_time = step.totalTime
 
-for field_name in data_dict_by_field.keys():
-    data_dict_by_field[field_name] = pd.concat(data_dict_by_field[field_name], axis = 0)
-    data_dict_by_field[field_name].sort_index(inplace = True, axis = 0)
-    data_dict_by_field[field_name].sort_index(inplace = True, axis = 1)
-    data_dict_by_field[field_name] =  data_dict_by_field[field_name].astype(np.float32)
-    assert data_dict_by_field[field_name].notna().all().all(), "Some values are missing"
+        processes = 4
+        with mp.Pool(processes=processes) as pool:
+            # parse_frame(odb, step_name, increment_number,
+            results = pool.starmap(parse_frame, [ (odb_fn, step_name, i) for i in range(len(step.frames)) ])
 
-    print(f'{field_name}: (timepoints, dofs) = {data_dict_by_field[field_name].shape}')
+        for result in results:
+            for field_name, df in result.items():
+                if field_name not in data_dict_by_field:
+                    data_dict_by_field[field_name] = []
+                data_dict_by_field[field_name].append(df)
+
+    for field_name in data_dict_by_field.keys():
+        data_dict_by_field[field_name] = pd.concat(data_dict_by_field[field_name], axis = 0)
+        data_dict_by_field[field_name].sort_index(inplace = True, axis = 0)
+        data_dict_by_field[field_name].sort_index(inplace = True, axis = 1)
+        data_dict_by_field[field_name] =  data_dict_by_field[field_name].astype(np.float32)
+        assert data_dict_by_field[field_name].notna().all().all(), "Some values are missing"
+
+        print(f'{loadcase}" : {field_name}: (timepoints, dofs) = {data_dict_by_field[field_name].shape}')
 
 
 
